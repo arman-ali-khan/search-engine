@@ -84,6 +84,9 @@ export default function AdminPage() {
   useEffect(() => {
     if (user?.role === 'admin') {
       loadStats()
+      loadUsers()
+      loadWebsites()
+      loadCrawlJobs()
     }
   }, [user])
 
@@ -127,7 +130,7 @@ export default function AdminPage() {
         .from('user_profiles')
         .select(`
           *,
-          websites(count)
+          websites!websites_owner_id_fkey(count)
         `)
         .order('created_at', { ascending: false })
 
@@ -246,6 +249,24 @@ export default function AdminPage() {
     } catch (error) {
       console.error('Error retrying job:', error)
       toast.error('Failed to retry job')
+    }
+  }
+
+  const handleToggleWebsiteVerification = async (websiteId: string, currentStatus: boolean) => {
+    try {
+      const { error } = await supabase
+        .from('websites')
+        .update({ verified: !currentStatus })
+        .eq('id', websiteId)
+
+      if (error) throw error
+      
+      toast.success(`Website ${!currentStatus ? 'verified' : 'unverified'} successfully`)
+      loadWebsites()
+      loadStats()
+    } catch (error) {
+      console.error('Error updating website verification:', error)
+      toast.error('Failed to update website verification')
     }
   }
 
@@ -391,9 +412,9 @@ export default function AdminPage() {
         <Tabs defaultValue="overview" className="w-full">
           <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="users">Users</TabsTrigger>
-            <TabsTrigger value="websites">Websites</TabsTrigger>
-            <TabsTrigger value="crawling">Crawling</TabsTrigger>
+            <TabsTrigger value="users" onClick={loadUsers}>Users</TabsTrigger>
+            <TabsTrigger value="websites" onClick={loadWebsites}>Websites</TabsTrigger>
+            <TabsTrigger value="crawling" onClick={loadCrawlJobs}>Crawling</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="mt-8">
@@ -577,7 +598,12 @@ export default function AdminPage() {
                             <TableCell>{website.owner_email}</TableCell>
                             <TableCell>
                               <Badge variant={website.verified ? "default" : "secondary"}>
-                                {website.verified ? "Verified" : "Pending"}
+                                <button
+                                  onClick={() => handleToggleWebsiteVerification(website.id, website.verified)}
+                                  className="cursor-pointer hover:opacity-80"
+                                >
+                                  {website.verified ? "Verified" : "Pending"}
+                                </button>
                               </Badge>
                             </TableCell>
                             <TableCell>{website.page_count}</TableCell>

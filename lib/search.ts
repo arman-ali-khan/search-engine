@@ -12,6 +12,8 @@ export interface SearchResult {
   videos: any[]
   website_title: string
   website_url: string
+  indexed_at: string
+  indexed_at: string
   rank: number
 }
 
@@ -42,16 +44,22 @@ export async function searchPages(options: SearchOptions): Promise<SearchResult[
 }
 
 export async function logSearch(query: string, searchType: string, resultCount: number, userId?: string) {
-  const { error } = await supabase
+  try {
+    const { error } = await supabase
     .from('search_logs')
     .insert({
-      user_id: userId,
+      user_id: userId || null,
       query,
       search_type: searchType,
       result_count: resultCount
     })
   
-  if (error) console.error('Failed to log search:', error)
+    if (error) {
+      console.error('Failed to log search:', error)
+    }
+  } catch (error) {
+    console.error('Failed to log search:', error)
+  }
 }
 
 export async function generateAISummary(query: string, topResults: SearchResult[]): Promise<string> {

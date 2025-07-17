@@ -11,7 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Input } from '@/components/ui/input'
 import { supabase } from '@/lib/supabase'
-import { getCrawlQueue, updateCrawlStatus, runCrawler } from '@/lib/crawler'
+import { getCrawlQueue, updateCrawlStatus } from '@/lib/crawler'
 import { Shield, Users, Globe, Database, Activity, AlertTriangle, Search, RefreshCw, CheckCircle, XCircle, Clock, Trash2 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { toast } from 'react-hot-toast'
@@ -312,7 +312,19 @@ export default function AdminPage() {
 
   const handleRunCrawler = async (jobId: string) => {
     try {
-      await runCrawler(jobId)
+      const response = await fetch('/api/crawl', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ jobId }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to start crawler')
+      }
+
       toast.success('Crawler started successfully')
       loadCrawlJobs()
     } catch (error) {

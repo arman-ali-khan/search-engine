@@ -1,5 +1,163 @@
 import { supabase } from './supabase'
 
+// Adult content detection
+const detectAdultContent = (url: string, title?: string, content?: string, description?: string): boolean => {
+  const adultKeywords = [
+    'porn', 'xxx', 'sex', 'adult', 'nude', 'naked', 'erotic', 'nsfw',
+    'escort', 'dating', 'hookup', 'cam', 'webcam', 'strip', 'fetish',
+    'milf', 'teen', 'mature', 'amateur', 'hardcore', 'softcore'
+  ]
+  
+  const adultDomains = [
+    'pornhub', 'xvideos', 'xhamster', 'redtube', 'youporn', 'tube8',
+    'spankbang', 'xnxx', 'chaturbate', 'onlyfans', 'manyvids'
+  ]
+  
+  const textToCheck = [url, title, content, description]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+  
+  // Check for adult domains
+  if (adultDomains.some(domain => url.toLowerCase().includes(domain))) {
+    return true
+  }
+  
+  // Check for adult keywords
+  const keywordMatches = adultKeywords.filter(keyword => 
+    textToCheck.includes(keyword)
+  ).length
+  
+  // If multiple keywords found, likely adult content
+  return keywordMatches >= 2
+}
+
+// Fetch and parse robots.txt
+const fetchRobotsTxt = async (baseUrl: string): Promise<string[]> => {
+  try {
+    const robotsUrl = new URL('/robots.txt', baseUrl).toString()
+    const response = await fetch(robotsUrl)
+    if (!response.ok) return []
+    
+    const robotsText = await response.text()
+    const disallowedPaths: string[] = []
+    
+    robotsText.split('\n').forEach(line => {
+      const trimmed = line.trim().toLowerCase()
+      if (trimmed.startsWith('disallow:')) {
+        const path = trimmed.substring(9).trim()
+        if (path && path !== '/') {
+          disallowedPaths.push(path)
+        }
+      }
+    })
+    
+    return disallowedPaths
+  } catch (error) {
+    console.error('Error fetching robots.txt:', error)
+    return []
+  }
+}
+
+// Check if URL is allowed by robots.txt
+const isAllowedByRobots = (url: string, disallowedPaths: string[]): boolean => {
+  const urlPath = new URL(url).pathname
+  return !disallowedPaths.some(disallowed => urlPath.startsWith(disallowed))
+}
+
+// Fetch and parse sitemap
+const fetchSitemap = async (sitemapUrl: string): Promise<string[]> => {
+  try {
+    const response = await fetch(sitemapUrl)
+    if (!response.ok) return []
+    
+    const sitemapText = await response.text()
+    const urls: string[] = []
+    
+    // Simple XML parsing for <loc> tags
+    const locMatches = sitemapText.match(/<loc>(.*?)<\/loc>/g)
+    if (locMatches) {
+      locMatches.forEach(match => {
+        const url = match.replace(/<\/?loc>/g, '').trim()
+        if (url) urls.push(url)
+      })
+    }
+    
+    return urls
+  } catch (error) {
+    console.error('Error fetching sitemap:', error)
+    return []
+  }
+}
+
+// Crawl a single page
+const crawlPage = async (url: string, websiteId: string): Promise<void> => {
+  try {
+    const response = await fetch(url)
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    }
+    
+    const html = await response.text()
+    
+    // Simple HTML parsing
+    const titleMatch = html.match(/<title>(.*?)<\/title>/i)
+    const title = titleMatch ? titleMatch[1].trim() : ''
+    
+    const metaDescMatch = html.match(/<meta\s+name=["']description["']\s+content=["'](.*?)["']/i)
+    const metaDescription = metaDescMatch ? metaDescMatch[1].trim() : ''
+    
+    // Extract text content (remove HTML tags)
+    const textContent = html
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .substring(0, 5000) // Limit content length
+    
+    // Extract images
+    const imageMatches = html.match(/<img[^>]+src=["']([^"']+)["'][^>]*>/gi) || []
+    const images = imageMatches.slice(0, 10).map(img => {
+      const srcMatch = img.match(/src=["']([^"']+)["']/)
+      const altMatch = img.match(/alt=["']([^"']+)["']/)
+      return {
+        src: srcMatch ? srcMatch[1] : '',
+        alt: altMatch ? altMatch[1] : ''
+      }
+    })
+    
+    // Check for adult content
+    const isAdultContent = detectAdultContent(url, title, textContent, metaDescription)
+    
+    if (isAdultContent) {
+      console.log(`Skipping adult content: ${url}`)
+      return
+    }
+    
+    // Determine page type
+    let pageType: 'webpage' | 'image' | 'video' | 'news' = 'webpage'
+    if (url.match(/\.(jpg|jpeg|png|gif|webp)$/i)) pageType = 'image'
+    else if (url.match(/\.(mp4|avi|mov|wmv|flv)$/i)) pageType = 'video'
+    else if (html.includes('article') || html.includes('news') || title.toLowerCase().includes('news')) pageType = 'news'
+    
+    // Save to database
+    await saveCrawledPage({
+      website_id: websiteId,
+      url,
+      title: title || undefined,
+      content: textContent || undefined,
+      meta_description: metaDescription || undefined,
+      page_type: pageType,
+      images: images.length > 0 ? images : undefined
+    })
+    
+  } catch (error) {
+    console.error(`Error crawling ${url}:`, error)
+    throw error
+  }
+}
+
 export interface CrawlJob {
   id: string
   website_id: string
@@ -103,7 +261,7 @@ export async function saveCrawledPage(data: {
   if (error) throw error
 }
 
-// Mock crawler function - in production, this would be a more sophisticated crawler
+// Enhanced crawler function with real crawling capabilities
 export async function runCrawler(jobId: string) {
   try {
     await updateCrawlStatus(jobId, 'running')
@@ -112,25 +270,65 @@ export async function runCrawler(jobId: string) {
       .from('crawl_queue')
       .select(`
         *,
-        websites (*)
+        websites (
+          id,
+          url,
+          sitemap_url,
+          title
+        )
       `)
       .eq('id', jobId)
       .single()
     
     if (error) throw error
     
-    // Simulate crawling
-    await new Promise(resolve => setTimeout(resolve, 2000))
+    const website = job.websites
+    if (!website) {
+      throw new Error('Website not found')
+    }
     
-    // Mock crawled data
-    await saveCrawledPage({
-      website_id: job.website_id,
-      url: job.url,
-      title: `Page from ${job.url}`,
-      content: `This is the content from ${job.url}. It contains relevant information about the website.`,
-      meta_description: `Meta description for ${job.url}`,
-      page_type: 'webpage'
-    })
+    const baseUrl = website.url
+    const sitemapUrl = website.sitemap_url
+    
+    // Check robots.txt
+    const disallowedPaths = await fetchRobotsTxt(baseUrl)
+    
+    // Get URLs to crawl
+    let urlsToCrawl: string[] = [baseUrl]
+    
+    // If sitemap is provided, use it
+    if (sitemapUrl) {
+      const sitemapUrls = await fetchSitemap(sitemapUrl)
+      if (sitemapUrls.length > 0) {
+        urlsToCrawl = sitemapUrls.filter(url => isAllowedByRobots(url, disallowedPaths))
+      }
+    }
+    
+    // Limit crawling to prevent overload
+    urlsToCrawl = urlsToCrawl.slice(0, 50)
+    
+    // Crawl each URL
+    let successCount = 0
+    let errorCount = 0
+    
+    for (const url of urlsToCrawl) {
+      try {
+        await crawlPage(url, website.id)
+        successCount++
+        
+        // Add delay between requests to be respectful
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      } catch (error) {
+        errorCount++
+        console.error(`Failed to crawl ${url}:`, error)
+      }
+    }
+    
+    if (errorCount > 0 && successCount === 0) {
+      throw new Error(`Failed to crawl any pages. Last error: ${errorCount} failures`)
+    }
+    
+    console.log(`Crawling completed: ${successCount} success, ${errorCount} errors`)
     
     await updateCrawlStatus(jobId, 'completed')
     
@@ -138,9 +336,11 @@ export async function runCrawler(jobId: string) {
     await supabase
       .from('websites')
       .update({ last_crawled_at: new Date().toISOString() })
-      .eq('id', job.website_id)
+      .eq('id', website.id)
     
   } catch (error) {
-    await updateCrawlStatus(jobId, 'failed', error instanceof Error ? error.message : 'Unknown error')
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+    await updateCrawlStatus(jobId, 'failed', errorMessage)
+    throw error
   }
 }

@@ -10,6 +10,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form'
 import { submitWebsite } from '@/lib/crawler'
+import { supabase } from '@/lib/supabase'
 import { toast } from 'react-hot-toast'
 import { Globe, Plus } from 'lucide-react'
 

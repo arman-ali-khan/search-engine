@@ -11,7 +11,7 @@ import { formatDistanceToNow } from 'date-fns'
 
 interface SearchResultsProps {
   query: string
-  userId?: string
+  userId?: string | null
 }
 
 export function SearchResults({ query, userId }: SearchResultsProps) {

@@ -59,11 +59,26 @@ interface CrawlJob {
   website_url: string
 }
 
+interface CrawledPage {
+  id: string
+  website_id: string
+  url: string
+  title: string
+  content: string
+  meta_description: string
+  page_type: 'webpage' | 'image' | 'video' | 'news'
+  indexed_at: string
+  website_title: string
+  website_url: string
+  is_adult_content: boolean
+}
+
 export default function AdminPage() {
   const [user, setUser] = useState<User | null>(null)
   const [users, setUsers] = useState<AdminUser[]>([])
   const [websites, setWebsites] = useState<AdminWebsite[]>([])
   const [crawlJobs, setCrawlJobs] = useState<CrawlJob[]>([])
+  const [crawledPages, setCrawledPages] = useState<CrawledPage[]>([])
   const [stats, setStats] = useState<AdminStats>({
     totalUsers: 0,
     totalWebsites: 0,
@@ -75,7 +90,9 @@ export default function AdminPage() {
   const [usersLoading, setUsersLoading] = useState(false)
   const [websitesLoading, setWebsitesLoading] = useState(false)
   const [crawlLoading, setCrawlLoading] = useState(false)
+  const [pagesLoading, setPagesLoading] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
+  const [showAdultContent, setShowAdultContent] = useState(false)
 
   useEffect(() => {
     loadUser()
@@ -87,6 +104,7 @@ export default function AdminPage() {
       loadUsers()
       loadWebsites()
       loadCrawlJobs()
+      loadCrawledPages()
     }
   }, [user])
 
@@ -197,6 +215,68 @@ export default function AdminPage() {
     }
   }
 
+  const loadCrawledPages = async () => {
+    setPagesLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from('pages')
+        .select(`
+          *,
+          websites!pages_website_id_fkey(title, url)
+        `)
+        .order('indexed_at', { ascending: false })
+        .limit(1000) // Limit to prevent performance issues
+
+      if (error) throw error
+
+      const pagesWithWebsiteInfo = data.map(page => ({
+        ...page,
+        website_title: page.websites?.title || 'Unknown',
+        website_url: page.websites?.url || '',
+        is_adult_content: detectAdultContent(page.url, page.title, page.content, page.meta_description)
+      }))
+
+      setCrawledPages(pagesWithWebsiteInfo as CrawledPage[])
+    } catch (error) {
+      console.error('Error loading crawled pages:', error)
+      toast.error('Failed to load crawled pages')
+    } finally {
+      setPagesLoading(false)
+    }
+  }
+
+  // Simple adult content detection based on keywords and patterns
+  const detectAdultContent = (url: string, title?: string, content?: string, description?: string): boolean => {
+    const adultKeywords = [
+      'porn', 'xxx', 'sex', 'adult', 'nude', 'naked', 'erotic', 'nsfw',
+      'escort', 'dating', 'hookup', 'cam', 'webcam', 'strip', 'fetish',
+      'milf', 'teen', 'mature', 'amateur', 'hardcore', 'softcore'
+    ]
+    
+    const adultDomains = [
+      'pornhub', 'xvideos', 'xhamster', 'redtube', 'youporn', 'tube8',
+      'spankbang', 'xnxx', 'chaturbate', 'onlyfans', 'manyvids'
+    ]
+    
+    const textToCheck = [url, title, content, description]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+    
+    // Check for adult domains
+    if (adultDomains.some(domain => url.toLowerCase().includes(domain))) {
+      return true
+    }
+    
+    // Check for adult keywords
+    const keywordMatches = adultKeywords.filter(keyword => 
+      textToCheck.includes(keyword)
+    ).length
+    
+    // If multiple keywords found, likely adult content
+    return keywordMatches >= 2
+  }
+
   const handleRoleChange = async (userId: string, newRole: 'admin' | 'webmaster' | 'user') => {
     try {
       await updateUserRole(userId, newRole)
@@ -252,6 +332,18 @@ export default function AdminPage() {
     }
   }
 
+  const handleUpdateCrawlStatus = async (jobId: string, newStatus: 'pending' | 'running' | 'completed' | 'failed') => {
+    try {
+      await updateCrawlStatus(jobId, newStatus)
+      toast.success(`Job status updated to ${newStatus}`)
+      loadCrawlJobs()
+      loadStats() // Refresh stats as pending crawls count may change
+    } catch (error) {
+      console.error('Error updating job status:', error)
+      toast.error('Failed to update job status')
+    }
+  }
+
   const handleToggleWebsiteVerification = async (websiteId: string, currentStatus: boolean) => {
     try {
       const { error } = await supabase
@@ -285,6 +377,15 @@ export default function AdminPage() {
     job.url.toLowerCase().includes(searchTerm.toLowerCase())
   )
 
+  const filteredCrawledPages = crawledPages.filter(page => {
+    const matchesSearch = page.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      page.url.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      page.website_title.toLowerCase().includes(searchTerm.toLowerCase())
+    
+    const matchesFilter = showAdultContent || !page.is_adult_content
+    
+    return matchesSearch && matchesFilter
+  })
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50">
@@ -410,11 +511,12 @@ export default function AdminPage() {
         </div>
 
         <Tabs defaultValue="overview" className="w-full">
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="users" onClick={loadUsers}>Users</TabsTrigger>
             <TabsTrigger value="websites" onClick={loadWebsites}>Websites</TabsTrigger>
             <TabsTrigger value="crawling" onClick={loadCrawlJobs}>Crawling</TabsTrigger>
+            <TabsTrigger value="pages" onClick={loadCrawledPages}>Crawled URLs</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="mt-8">
@@ -701,15 +803,22 @@ export default function AdminPage() {
                                   {job.status === 'running' && <RefreshCw className="h-4 w-4 text-blue-500 animate-spin" />}
                                   {job.status === 'completed' && <CheckCircle className="h-4 w-4 text-green-500" />}
                                   {job.status === 'failed' && <XCircle className="h-4 w-4 text-red-500" />}
-                                  <Badge 
-                                    variant={
-                                      job.status === 'completed' ? 'default' :
-                                      job.status === 'running' ? 'default' :
-                                      job.status === 'failed' ? 'destructive' : 'secondary'
+                                  <Select
+                                    value={job.status}
+                                    onValueChange={(value: 'pending' | 'running' | 'completed' | 'failed') => 
+                                      handleUpdateCrawlStatus(job.id, value)
                                     }
                                   >
-                                    {job.status}
-                                  </Badge>
+                                    <SelectTrigger className="w-32">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="pending">Pending</SelectItem>
+                                      <SelectItem value="running">Running</SelectItem>
+                                      <SelectItem value="completed">Completed</SelectItem>
+                                      <SelectItem value="failed">Failed</SelectItem>
+                                    </SelectContent>
+                                  </Select>
                                 </div>
                               </TableCell>
                               <TableCell>{job.priority}</TableCell>
@@ -753,6 +862,135 @@ export default function AdminPage() {
                               </TableRow>
                             )}
                           </>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="pages" className="mt-8">
+            <div className="space-y-6">
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle>Crawled URLs Management</CardTitle>
+                      <CardDescription>
+                        Monitor all crawled pages with content filtering
+                      </CardDescription>
+                    </div>
+                    <Button onClick={loadCrawledPages} disabled={pagesLoading}>
+                      <RefreshCw className={`h-4 w-4 mr-2 ${pagesLoading ? 'animate-spin' : ''}`} />
+                      Refresh
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="mb-4 space-y-4">
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                      <Input
+                        placeholder="Search pages by title, URL, or website..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="pl-10"
+                      />
+                    </div>
+                    
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-center space-x-2">
+                        <input
+                          type="checkbox"
+                          id="showAdultContent"
+                          checked={showAdultContent}
+                          onChange={(e) => setShowAdultContent(e.target.checked)}
+                          className="rounded border-gray-300"
+                        />
+                        <label htmlFor="showAdultContent" className="text-sm font-medium">
+                          Show 18+ content
+                        </label>
+                      </div>
+                      <Badge variant="outline" className="text-xs">
+                        {filteredCrawledPages.length} pages shown
+                      </Badge>
+                      {!showAdultContent && (
+                        <Badge variant="secondary" className="text-xs">
+                          Adult content filtered
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                  
+                  {pagesLoading ? (
+                    <div className="flex justify-center py-8">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                    </div>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Page Title</TableHead>
+                          <TableHead>URL</TableHead>
+                          <TableHead>Website</TableHead>
+                          <TableHead>Type</TableHead>
+                          <TableHead>Content Rating</TableHead>
+                          <TableHead>Indexed</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredCrawledPages.map((page) => (
+                          <TableRow key={page.id}>
+                            <TableCell>
+                              <div className="max-w-xs">
+                                <div className="font-medium truncate">
+                                  {page.title || 'Untitled'}
+                                </div>
+                                {page.meta_description && (
+                                  <div className="text-sm text-gray-500 truncate">
+                                    {page.meta_description.slice(0, 100)}...
+                                  </div>
+                                )}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <a 
+                                href={page.url} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="text-blue-600 hover:text-blue-800 text-sm max-w-xs block truncate"
+                              >
+                                {page.url}
+                              </a>
+                            </TableCell>
+                            <TableCell>
+                              <div className="max-w-xs">
+                                <div className="font-medium truncate">{page.website_title}</div>
+                                <div className="text-sm text-gray-500 truncate">{page.website_url}</div>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline" className="capitalize">
+                                {page.page_type}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              {page.is_adult_content ? (
+                                <Badge variant="destructive" className="text-xs">
+                                  18+
+                                </Badge>
+                              ) : (
+                                <Badge variant="default" className="text-xs bg-green-600">
+                                  Safe
+                                </Badge>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              {formatDistanceToNow(new Date(page.indexed_at), { addSuffix: true })}
+                            </TableCell>
+                          </TableRow>
                         ))}
                       </TableBody>
                     </Table>

@@ -1,14 +1,30 @@
 'use client'
 
 import { useState } from 'react'
+import { useEffect } from 'react'
 import { SearchBox } from '@/components/SearchBox'
 import { SearchResults } from '@/components/SearchResults'
 import { Header } from '@/components/Header'
+import { getCurrentUser } from '@/lib/auth'
 import { Search } from 'lucide-react'
 
 export default function Home() {
   const [searchQuery, setSearchQuery] = useState('')
   const [hasSearched, setHasSearched] = useState(false)
+  const [userId, setUserId] = useState<string | null>(null)
+
+  useEffect(() => {
+    const loadUser = async () => {
+      try {
+        const user = await getCurrentUser()
+        setUserId(user?.id || null)
+      } catch (error) {
+        // User not authenticated, keep userId as null
+        setUserId(null)
+      }
+    }
+    loadUser()
+  }, [])
 
   const handleSearch = (query: string) => {
     setSearchQuery(query)
@@ -64,7 +80,7 @@ export default function Home() {
               />
             </div>
             
-            <SearchResults query={searchQuery} />
+            <SearchResults query={searchQuery} userId={userId} />
           </div>
         )}
       </main>
